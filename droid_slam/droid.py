@@ -1,3 +1,5 @@
+import os
+
 import torch
 import lietorch
 import numpy as np
@@ -28,14 +30,17 @@ class Droid:
 
         # frontend process
         self.frontend = DroidFrontend(self.net, self.video, self.args)
-        
+
         # backend process
         self.backend = DroidBackend(self.net, self.video, self.args)
 
         # visualizer
         if not self.disable_vis:
             from visualization import droid_visualization
-            self.visualizer = Process(target=droid_visualization, args=(self.video,))
+            plypath = os.path.join("plys", args.ply)
+            if not os.path.isdir(plypath):
+                os.mkdir(plypath)
+            self.visualizer = Process(target=droid_visualization, args=(self.video, plypath))
             self.visualizer.start()
 
         # post processor - fill in poses for non-keyframes
