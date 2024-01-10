@@ -6,9 +6,15 @@ import time
 import argparse
 import numpy as np
 import open3d as o3d
+import warnings
 
 from lietorch import SE3
 import geom.projective_ops as pops
+
+# Suppress Open3D warnings
+# uncomment this to know whether feature extraction is going well or not
+o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
+
 
 CAM_POINTS = np.array([
         [ 0,   0,   0],
@@ -33,6 +39,7 @@ def white_balance(img):
     result = cv2.cvtColor(result, cv2.COLOR_LAB2BGR)
     return result
 
+
 def create_camera_actor(g, scale=0.05):
     """ build open3d camera polydata """
     camera_actor = o3d.geometry.LineSet(
@@ -43,6 +50,7 @@ def create_camera_actor(g, scale=0.05):
     camera_actor.paint_uniform_color(color)
     return camera_actor
 
+
 def create_point_actor(points, colors):
     """ open3d point cloud from numpy array """
     point_cloud = o3d.geometry.PointCloud()
@@ -50,18 +58,21 @@ def create_point_actor(points, colors):
     point_cloud.colors = o3d.utility.Vector3dVector(colors)
     return point_cloud
 
-def droid_visualization(video, device="cuda:0"):
+
+def droid_visualization(video, save_path, device="cuda:0"):
     """ DROID visualization frontend """
 
-    torch.cuda.set_device(device)
+    torch.cuda.set_device(0)
     droid_visualization.video = video
     droid_visualization.cameras = {}
     droid_visualization.points = {}
     droid_visualization.warmup = 8
     droid_visualization.scale = 1.0
     droid_visualization.ix = 0
+    print("droid_visualization")
 
-    droid_visualization.filter_thresh = 0.005
+
+    droid_visualization.filter_thresh = 0.3  #0.005
 
     def increase_filter(vis):
         droid_visualization.filter_thresh *= 2
@@ -79,7 +90,7 @@ def droid_visualization(video, device="cuda:0"):
         with torch.no_grad():
 
             with video.get_lock():
-                t = video.counter.value 
+                t = video.counter.value
                 dirty_index, = torch.where(video.dirty.clone())
                 dirty_index = dirty_index
 
@@ -98,14 +109,14 @@ def droid_visualization(video, device="cuda:0"):
             points = droid_backends.iproj(SE3(poses).inv().data, disps, video.intrinsics[0]).cpu()
 
             thresh = droid_visualization.filter_thresh * torch.ones_like(disps.mean(dim=[1,2]))
-            
+
             count = droid_backends.depth_filter(
                 video.poses, video.disps, video.intrinsics[0], dirty_index, thresh)
 
             count = count.cpu()
             disps = disps.cpu()
             masks = ((count >= 2) & (disps > .5*disps.mean(dim=[1,2], keepdim=True)))
-            
+
             for i in range(len(dirty_index)):
                 pose = Ps[i]
                 ix = dirty_index[i].item()
@@ -124,14 +135,32 @@ def droid_visualization(video, device="cuda:0"):
                 vis.add_geometry(cam_actor)
                 droid_visualization.cameras[ix] = cam_actor
 
+
                 mask = masks[i].reshape(-1)
                 pts = points[i].reshape(-1, 3)[mask].cpu().numpy()
                 clr = images[i].reshape(-1, 3)[mask].cpu().numpy()
-                
+
                 ## add point actor ###
                 point_actor = create_point_actor(pts, clr)
                 vis.add_geometry(point_actor)
                 droid_visualization.points[ix] = point_actor
+
+            ### Hack to save Point Cloud Data and Camnera results ###
+
+            # Save points
+            pcd_points = o3d.geometry.PointCloud()
+            for p in droid_visualization.points.items():
+                pcd_points += p[1]
+            o3d.io.write_point_cloud(f"{save_path}/points.ply", pcd_points, write_ascii=False)
+
+            # Save pose
+            pcd_camera = create_camera_actor(True)
+            for c in droid_visualization.cameras.items():
+                pcd_camera += c[1]
+
+            o3d.io.write_line_set(f"{save_path}/camera.ply", pcd_camera, write_ascii=False)
+
+            ### end ###
 
             # hack to allow interacting with vizualization during inference
             if len(droid_visualization.cameras) >= droid_visualization.warmup:
